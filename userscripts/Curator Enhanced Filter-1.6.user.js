@@ -1,9 +1,8 @@
 // ==UserScript==
 // @name:zh-CN               鉴赏家增强筛选工具
 // @name                     Curator Enhanced Filter
-// @version                  1.6
-// @description              增强Steam鉴赏家已接受游戏的筛选功能：状态、接受/评测时间排序、接收者筛选（性能优化版）
-// @description:zh-CN        增强Steam鉴赏家已接受游戏的筛选功能：状态、接受/评测时间排序、接收者筛选（性能优化版）
+// @version                  1.7
+// @description              增强Steam鉴赏家已接受游戏的筛选功能：状态、接受/评测时间排序、接收者筛选
 // @author                   Maple
 // @match                    https://store.steampowered.com/curator/*/admin/accepted*
 // @match                    https://store.steampowered.com/curator/*/admin/accepted/*
@@ -17,7 +16,7 @@
     'use strict';
 
     // ============ 常量 / 状态 ============
-    const VERSION = '1.6';
+    const VERSION = '1.7';
 
     // 仅支持 中 / 英 / 日 三语日期解析（其他语言不保证准确）
     // 英文月份缩写/全称 → 0-11
@@ -86,20 +85,22 @@
     }
 
     // "评测于"前缀（中英日繁），从评测块文本中切出日期片段
+    // 日语正则统一为年份可选的 C/M/D 日格式，靠 parseDate 的 CJK 解析器兜底
     const REVIEW_PREFIXES = [
         /已于\s*(.+?)\s*评测/,                                  // zh-CN
         /已於\s*(.+?)\s*評測/,                                  // zh-TW
         /Reviewed\s+on\s+(.+?)(?:\s+Read\b|\s*$)/i,             // en
-        /(\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日)\s*に(?:レビュー|評価)/, // ja "2024 年 7 月 26 日 にレビュー"
-        /レビュー(?:済み|日)?[:：]?\s*(.+?)(?:\s|$)/             // ja 兜底
+        /(\d{4}\s*年\s*)?(\d{1,2}\s*月\s*\d{1,2}\s*日)\s*に(?:レビュー|評価)/  // ja (年份可选)
     ];
 
     function extractReviewDate(text) {
         if (!text) return null;
         for (let i = 0; i < REVIEW_PREFIXES.length; i++) {
             const m = REVIEW_PREFIXES[i].exec(text);
-            if (m && m[1]) {
-                const t = parseDate(m[1]);
+            if (m) {
+                // 日语格式年份可选时，m[1] 可能为 undefined，传递 m[2]（月日部分）
+                const dateStr = m[2] || m[1];
+                const t = dateStr ? parseDate(dateStr) : null;
                 if (t != null) return t;
             }
         }
@@ -137,7 +138,7 @@
 
         for (let i = 0; i < len; i++) {
             const el = children[i];
-            if (!el.id || el.id.charCodeAt(0) !== 97 /* 'a' */) continue; // 跳过非 app-ctn-*
+            if (!el.id || !el.id.startsWith('app-ctn-')) continue;
 
             // appid 直接从 id 切片，不用正则
             const appid = el.id.slice(8); // 'app-ctn-' 长度 8
@@ -212,7 +213,7 @@
         log(`日期解析成功率: 接受时间 ${acceptOk}/${data.length}, 评测时间 ${reviewOk}/${reviewedTotal}`);
         if (acceptOk < data.length * 0.5 || (reviewedTotal > 0 && reviewOk < reviewedTotal * 0.5)) {
             warn('日期解析成功率偏低！请把以下样本贴给开发者：');
-            for (let i = 0; i < Math.min(3, data.length); i++) {
+            for (let i = 0; i < Math.min(5, data.length); i++) {
                 const el = data[i].element;
                 const ctn = el.getElementsByClassName('app_name_ctn');
                 const date = el.getElementsByClassName('action_date');
@@ -419,12 +420,10 @@
         });
         panel.querySelector('#cef_reload').addEventListener('click', () => {
             updateStatus('重新解析中...');
-            rICb(() => {
-                buildGameData();
-                refreshReviewerSelect();
-                g_LastSort = null; // 强制重排
-                scheduleApply();
-            });
+            buildGameData();
+            refreshReviewerSelect();
+            g_LastSort = null; // 强制重排
+            scheduleApply();
         });
 
         g_PanelMounted = true;
@@ -533,10 +532,10 @@
     GM_addStyle(
         // 关键性能样式：
         // - cef_hide：用 class 隐藏，比 inline display 切换样式失效更轻
-        // - content-visibility:auto：浏览器跳过非视口卡片的 layout/paint（Chrome/Firefox 125+ 支持）
+        // - content-visibility:auto：浏览器跳过非视口卡片的 layout/paint
         // - contain-intrinsic-size：给跳过渲染的卡片预设占位高度，避免滚动条跳动
         // - contain:layout style：限制 reflow 在卡片内部，不影响兄弟和父级
-        '#apps_all > .app_ctn{content-visibility:auto;contain-intrinsic-size:auto 156px;contain:layout style}' +
+        '#apps_all > .app_ctn{content-visibility:auto;contain-intrinsic-size:auto 220px;contain:layout style}' +
         '#apps_all > .app_ctn.cef_hide{display:none!important}' +
         '.cef_panel{background:rgba(0,0,0,.2);border:1px solid #000;box-shadow:inset 1px 1px 0 rgba(255,255,255,.04);padding:12px 14px;margin:8px 0 14px;color:#c6d4df;font-family:"Motiva Sans",Arial,sans-serif;font-size:13px}' +
         '.cef_title{color:#67c1f5;font-size:14px;font-weight:300;text-transform:uppercase;letter-spacing:1px;padding-bottom:8px;border-bottom:1px solid rgba(103,193,245,.15);margin-bottom:10px}' +
@@ -547,11 +546,8 @@
         '.cef_btn{display:inline-block;cursor:pointer;text-decoration:none;color:#67c1f5;background:rgba(103,193,245,.2);padding:1px;border-radius:2px;line-height:18px;transition:background .15s}' +
         '.cef_btn>span{display:block;padding:4px 12px;font-size:12px;color:inherit}' +
         '.cef_btn:hover{background:#67c1f5;color:#fff}' +
-        '.cef_btn:hover>span{color:#fff}' +
         '.cef_btn.cef_active{background:linear-gradient(to right,#47bfff 0,#1a44c2 100%);color:#fff}' +
-        '.cef_btn.cef_active>span{color:#fff}' +
         '.cef_btn_blue{background:linear-gradient(to right,#47bfff 0,#1a44c2 100%);color:#fff;margin-left:auto}' +
-        '.cef_btn_blue>span{color:#fff}' +
         '#cef_sort,#cef_reviewer{background-color:#316282;background-image:linear-gradient(to bottom,#417a9b 5%,#1f3346 95%);border:1px solid rgba(0,0,0,.5);color:#fff;padding:4px 6px;border-radius:2px;font-size:12px;font-family:inherit;outline:none;cursor:pointer}' +
         '#cef_sort:hover,#cef_reviewer:hover{background-image:linear-gradient(to bottom,#4d8bb0 5%,#25405c 95%)}' +
         '#cef_reviewer{min-width:160px}' +
@@ -561,4 +557,3 @@
 
     init();
 })();
-
